@@ -73,6 +73,25 @@ class BackgroundSettingsRepository(context: Context) {
     }
 
     /**
+     * [T-android-overlay-line-count] How many text lines the floating capsule
+     * reserves: 1 for the task title, 1 for the current tool, the rest for the
+     * assistant's reply. Defaults to the smallest choice — the capsule covers
+     * other apps, so it starts as unobtrusive as the old two-row one and the
+     * user opts UP into a taller card.
+     *
+     * Reactive like the toggle: the FG service collects this flow, so changing
+     * it re-lays-out a capsule that is on screen right now.
+     */
+    private val _overlayLineCount = MutableStateFlow(readOverlayLineCount(prefs))
+    val overlayLineCount: StateFlow<Int> = _overlayLineCount.asStateFlow()
+
+    fun setOverlayLineCount(value: Int) {
+        val safe = value.coerceIn(MIN_OVERLAY_LINES, MAX_OVERLAY_LINES)
+        prefs.edit().putInt(KEY_BG_OVERLAY_LINES, safe).apply()
+        _overlayLineCount.value = safe
+    }
+
+    /**
      * [FIX-261025-03] How long before a scheduled task's next run its chat
      * counts as active again, bringing back the ongoing notification, the
      * capsule / Live Updates countdown and the keep-alive. Stored as an index
@@ -104,6 +123,7 @@ class BackgroundSettingsRepository(context: Context) {
             KEY_TASK_NOTIFICATIONS ->
                 _taskNotificationsEnabled.value = p.getBoolean(key, DEFAULT_TASK_NOTIFICATIONS)
             KEY_BG_OVERLAY_ENABLED -> _backgroundOverlayEnabled.value = p.getBoolean(key, false)
+            KEY_BG_OVERLAY_LINES -> _overlayLineCount.value = readOverlayLineCount(p)
             KEY_DYNAMIC_ISLAND_ENABLED -> _dynamicIslandEnabled.value = p.getBoolean(key, false)
             KEY_SCHEDULED_COUNTDOWN_LEAD -> _scheduledCountdownLead.value = readScheduledCountdownLead(p)
         }
@@ -149,11 +169,23 @@ class BackgroundSettingsRepository(context: Context) {
         internal const val KEY_TASK_NOTIFICATIONS = "taskNotificationsEnabled"
         internal const val DEFAULT_TASK_NOTIFICATIONS = true
         private const val KEY_BG_OVERLAY_ENABLED = "backgroundOverlayEnabled"
+        private const val KEY_BG_OVERLAY_LINES = "backgroundOverlayLines"
         private const val KEY_BG_OVERLAY_X = "backgroundOverlayX"
         private const val KEY_BG_OVERLAY_Y = "backgroundOverlayY"
         private const val KEY_BG_OVERLAY_LAND_X = "backgroundOverlayLandscapeX"
         private const val KEY_BG_OVERLAY_LAND_Y = "backgroundOverlayLandscapeY"
         internal const val KEY_DYNAMIC_ISLAND_ENABLED = "dynamicIslandEnabled"
+
+        /** [T-android-overlay-line-count] The bounds the Settings picker offers. */
+        const val MIN_OVERLAY_LINES = 3
+        const val MAX_OVERLAY_LINES = 6
+        const val DEFAULT_OVERLAY_LINES = 3
+
+        /** A stored count outside the range (an older build's value, a hand-edited
+         *  prefs file) reads as the default rather than as a 200-line capsule. */
+        internal fun readOverlayLineCount(p: SharedPreferences): Int =
+            p.getInt(KEY_BG_OVERLAY_LINES, DEFAULT_OVERLAY_LINES)
+                .coerceIn(MIN_OVERLAY_LINES, MAX_OVERLAY_LINES)
 
         internal const val KEY_SCHEDULED_COUNTDOWN_LEAD = "scheduledCountdownLead"
 

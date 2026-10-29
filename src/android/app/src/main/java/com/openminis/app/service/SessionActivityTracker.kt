@@ -227,8 +227,15 @@ object SessionActivityTracker {
     private val _currentSessionId = MutableStateFlow<String?>(null)
     val currentSessionId: StateFlow<String?> = _currentSessionId.asStateFlow()
 
-    /** Max chars of the assistant reply we surface in the overlay. */
-    private const val REPLY_EXCERPT_MAX = 72
+    /**
+     * Max chars of the assistant reply we surface in the overlay.
+     *
+     * [T-android-overlay-enlarged] 72 -> 140. The capsule now shows this text on
+     * two lines of 12sp inside a wider pill (~186dp of text on a 393dp phone),
+     * which is roughly 2 x 30 latin / 2 x 15 CJK characters, so the old budget
+     * was cutting the reply well before the surface could carry it.
+     */
+    private const val REPLY_EXCERPT_MAX = 140
 
     /**
      * [T-android-overlay-multitask] One slot per task the capsule can page

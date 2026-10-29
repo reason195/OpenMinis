@@ -577,6 +577,10 @@ class AgentForegroundService : Service() {
                 // [T-port-sched-overlay-waiting] A chat waiting for its next
                 // scheduled run: the capsule shows that, not "completed".
                 SessionActivityTracker.scheduledWait,
+                // [T-android-overlay-line-count] How many lines the user picked.
+                // Reactive like the toggle: changing it in Settings resizes a
+                // capsule that is on screen right now.
+                backgroundRepo.overlayLineCount,
             ) { values: Array<Any?> ->
                 @Suppress("UNCHECKED_CAST")
                 val activeSessions = values[13] as Set<String>
@@ -599,6 +603,7 @@ class AgentForegroundService : Service() {
                     soulIdentity = (values[15] as SoulMetadata).let { it.name to it.icon },
                     isThinking = values[16] as Boolean,
                     scheduledWait = values[17] as com.openminis.app.scheduled.ScheduledWait?,
+                    overlayLines = values[18] as Int,
                 )
             }.distinctUntilChanged().collect { state -> applyOverlayState(state) }
         }
@@ -648,10 +653,16 @@ class AgentForegroundService : Service() {
         // [T-port-sched-overlay-waiting] The next scheduled run of a chat its
         // task keeps active, or null.
         val scheduledWait: com.openminis.app.scheduled.ScheduledWait? = null,
+        // [T-android-overlay-line-count] Text lines the user picked in Settings.
+        val overlayLines: Int = com.openminis.app.data.repository.BackgroundSettingsRepository.DEFAULT_OVERLAY_LINES,
     )
 
     private fun applyOverlayState(state: OverlayState) {
         val controller = overlayController ?: return
+        // [T-android-overlay-line-count] First thing: the height is a window
+        // property, so it has to be right before any show() or hide() path
+        // resizes or re-places the capsule.
+        controller.setLineCount(state.overlayLines)
         val hasPerm = controller.hasOverlayPermission()
 
         // [T-android-dynamic-island] MUTUAL EXCLUSION (critical): when the

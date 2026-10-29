@@ -1,13 +1,9 @@
 package com.openminis.app.service
 
-import android.animation.ObjectAnimator
-import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
@@ -24,37 +20,37 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewOutlineProvider
 import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Chronometer
 import android.widget.TextView
 import com.openminis.app.MinisApp
-import com.openminis.app.agent.SoulIcon
 import com.openminis.app.agent.SoulMetadata
 import com.openminis.app.agent.SoulStore
 import com.openminis.app.ui.chat.friendlyToolTitleFor
-import com.openminis.app.ui.chat.toolAccentColorInt
-import com.openminis.app.ui.chat.toolIconResFor
 import com.openminis.app.R
 import kotlin.math.abs
-import androidx.compose.ui.graphics.toArgb
 
 /**
  * T-bg-overlay phase 2: floating tool-status overlay.
  *
- * Adds a small draggable capsule via [WindowManager] using
- * TYPE_APPLICATION_OVERLAY (requires SYSTEM_ALERT_WINDOW). The capsule
- * shows the Minis launcher logo, the running tool's label, and a short
- * status — same data the FGS notification reads
- * (`SessionActivityTracker.currentToolName` / `currentToolStatus`).
+ * Adds a draggable capsule via [WindowManager] using
+ * TYPE_APPLICATION_OVERLAY (requires SYSTEM_ALERT_WINDOW). The capsule is
+ * pure text — same data the FGS notification reads
+ * (`SessionActivityTracker.currentToolName` / `currentToolStatus`):
  *
- * T-bg-overlay-polish: the per-tool icon was replaced with the Minis
- * launcher icon clipped to a circle, a thin stroke ring rotates around
- * the logo while a tool is running, and a small success/error glyph
- * leads the second row once a tool finishes.
+ *   row 1     the task's title (Soul name until a session has one)
+ *   row 2     the step: the model's tool_title, or generating / thinking /
+ *             the countdown to the next scheduled run
+ *   row 3 ..  the assistant's reply, led by the outcome ✓/✗
+ *
+ * [T-android-overlay-line-count] How many lines rows 3+ get is the user's
+ * choice in Settings (3..6 total), which also sets the window height.
+ *
+ * [T-android-overlay-no-icon] It used to lead with the Minis launcher icon
+ * clipped to a circle, with a thin stroke ring rotating around it while a tool
+ * ran. The user asked for the icon out; the ring traced that circle, so it
+ * went too, and running state is carried by the status line and the clock.
  *
  * Owned by [AgentForegroundService]; created on service start, destroyed
  * on service stop. Visibility is driven by the service's collector:
@@ -72,169 +68,117 @@ class ToolOverlayController(private val context: Context) {
     companion object {
         private const val TAG = "ToolOverlayController"
         private const val DRAG_SLOP_DP = 8f
-        private const val LOGO_SIZE_DP = 26
-        // [T-overlay-ring-outside] The spinner is drawn OUTSIDE the logo
-        // circle, on the capsule's dark fill, touching the logo's edge
-        // (RING_GAP_DP = 0: the stroke's inner edge IS the logo radius).
-        //
-        // It used to sit inside the logo box (RING_INSET_DP = 0, the stroke
-        // inset by half its width), i.e. drawn ON the logo's rim. That made
-        // its legibility depend on whatever the logo is: on the default
-        // launcher mark the rim is the near-white #EFF2F6 in light mode, and
-        // the light-blue arc over it measured 1.4-1.6:1 - the #333 report
-        // ("spinner barely visible in light mode, fine in dark", where the
-        // rim is #2C3034). Outside the circle the arc always sits on the
-        // capsule fill, whatever the logo or theme, so one style serves every
-        // logo and no part of the logo is covered.
-        //
-        // [T-overlay-ring-track] A faint full-circle track runs under a short
-        // bright arc. A bare arc with nothing under it read as a line cutting
-        // through the icon; the track makes it an obvious progress ring.
-        //
-        // The ring view is larger than the logo box and draws into the
-        // capsule's leading padding (clipChildren / clipToPadding off), so
-        // no measured size or position in the capsule changes.
-        private const val RING_GAP_DP = 0f
-        private const val RING_STROKE_DP = RING_STROKE_DP_VALUE
 
-        // [T-android-overlay-icon-plate] Inset of a GLYPH inside the identity
-        // circle, as a fraction of the circle's box.
-        //
-        // The previous 18% was derived from the glyph's bounding SQUARE, whose
-        // corners do sit inside the circle at that inset. But a tool glyph is
-        // not square art: the terminal icon in particular is a wide monitor
-        // shape whose flat left/right edges run nearly the full viewport width
-        // at mid-height, which is exactly where the circle is widest and the
-        // ring is drawn. The result was the glyph's sides crossing the ring's
-        // arc. 26% pulls the art well clear of the stroke at every aspect the
-        // icon set uses, at the cost of a slightly smaller glyph.
-        private const val GLYPH_INSET_FRACTION = 0.26f
-
-        /** Alpha of the tinted plate behind a tool glyph, out of 255. */
-        private const val PLATE_ALPHA = 38
+        // [T-android-overlay-no-icon] The leading identity circle is gone —
+        // the user asked for the icon back out of the capsule, which hands its
+        // 34dp plus 6dp margin plus 15dp of ring-clearance padding straight to
+        // the text. The spinner ring traced that circle and the plate sat
+        // behind it, so both go with it; running state is carried by the status
+        // line and the ticking clock instead. The outcome still gets its ✓/✗,
+        // which leads the reply line.
 
         // [T-android-overlay-two-row] Tool glyph on row 2. Slightly larger
-        // than the 10sp text beside it so the icon reads at a glance without
+        // than the text beside it so the icon reads at a glance without
         // making the row taller than the text's own line height.
-        private const val TOOL_ICON_SIZE_DP = 13
+        private const val TOOL_ICON_SIZE_DP = 16
         private const val EDGE_PADDING_DP = 10
-        // [T-android-overlay-dimensions-stable] Pin capsule height so
-        // it doesn't jitter across states (spinner / completed / reply
-        // / error).
+
+        // [T-android-overlay-line-count] The capsule is as tall as the number
+        // of text lines the user picked in Settings (3..6): one line for the
+        // task title, one for the current step, the rest for the reply.
         //
-        // [T-android-overlay-third-row-clipped] The height must cover the
-        // TALLEST state, which is three text rows, not two. The comment here
-        // used to reason about "a two-row text column" and justify 56dp, while
-        // the constant said 44 — the prose and the number had drifted apart,
-        // and the number was the one users saw.
+        // Height is DERIVED, never pinned per choice, so the arithmetic below
+        // is the single source of truth. Measured line boxes on a 440dpi
+        // device (2.75x, font scale 1.0): 12sp measured 40px ≈ 14.5dp and 14sp
+        // 44px ≈ 16dp, and the rule the old CAPSULE_HEIGHT_DP comment used is
+        // 1.33dp per sp — which is where TITLE_LINE_DP and BODY_LINE_DP come
+        // from, rounded up so a wrapped line cannot be clipped by the fixed
+        // window height.
         //
-        // [T-android-overlay-two-row] Two rows are stacked in `textCol`: the
-        // app/outcome label (12sp) and the tool row (a 13dp glyph beside 10sp
-        // text). Both are single-line with ellipsize, so no row ever WRAPS.
-        // A third row used to carry the assistant's reply excerpt; it was
-        // dropped in the two-row redesign.
+        //     lines 3  12 + 19 + 2 x 16 = 63dp
+        //     lines 4  12 + 19 + 3 x 16 = 79dp
+        //     lines 5  12 + 19 + 4 x 16 = 95dp
+        //     lines 6  12 + 19 + 5 x 16 = 111dp
         //
-        // Budget from MEASURED rows on a 440dpi device (2.75x), never from a
-        // nominal line-spacing estimate — an earlier pass computed 54dp from
-        // the 1.2x rule and it was genuinely too small on device.
-        //
-        // [T-android-overlay-two-row] Measured after the capsule went from
-        // three rows to two. Both of row 2's variants were measured, since
-        // [T-android-overlay-reply-row] gave it different content per state —
-        // and it is the COMPLETED state that is the taller of the two, because
-        // its label row grows to seat the tick and the clock:
-        //
-        //     running    label 44px + row2 40px           = 84px
-        //     completed  label 49px + row2 39px           = 88px  ← binding
-        //     6dp + 6dp padding                           = 33px
-        //                                        88 + 33  = 121px ≈ 44.0dp
-        //
-        // 46dp keeps a couple of dp of slack over that for a font-scale nudge
-        // without leaving the two-row capsule visibly hollow — at the previous
-        // 60dp it carried ~48px of dead vertical space once the third row was
-        // gone. Neither leading glyph is the binding constraint (both measure
-        // 36px inside their ~40px row), nor is the 26dp logo.
-        private const val CAPSULE_HEIGHT_DP = 46
-        // [T-overlay-ring-even-margins] Leading padding of the capsule, chosen
-        // so the spinner ring sits the same distance from the capsule's left
-        // edge as from its top and bottom edges (#333: at 6dp the ring was
-        // 4.5dp from the left but 8.5dp from the top and bottom, and looked
-        // pushed against the side).
-        //
-        // The ring's outer edge is the logo plus one stroke on every side:
-        // 26 + 2 x 1.5 = 29dp across. Centred in the 46dp capsule that leaves
-        // (46 - 29) / 2 = 8.5dp above and below. The ring overhangs the logo
-        // box by one stroke (1.5dp) into this padding, so the padding that
-        // gives the same 8.5dp on the left is 8.5 + 1.5 = 10dp - see
-        // OverlayMargins.startPaddingDp, which the test ties to this value.
-        // The height and the vertical padding are deliberately left alone:
-        // 46dp is the measured text column plus ~2dp of slack (above).
-        private const val CAPSULE_PADDING_START_DP = 10
-        // Everything in the capsule's row that is not text, besides the
-        // leading padding: logo 26 + its right margin 6 + close glyph 14 +
-        // its left margin 10 + right padding 14.
-        private const val CAPSULE_NON_TEXT_DP = 70
+        // [T-android-overlay-dimensions-stable] The height is fixed FOR A GIVEN
+        // choice rather than wrapping the content: a capsule that grew every
+        // time a reply arrived was the jitter this file's history keeps
+        // warning about. Changing the setting re-lays-out a shown capsule
+        // ([setLineCount]), which is a user action, not a state flip.
+        internal const val OVERLAY_MIN_LINES = 3
+        internal const val OVERLAY_MAX_LINES = 6
+        private const val TITLE_LINE_DP = 19f
+        private const val BODY_LINE_DP = 16f
+        private const val CAPSULE_VERTICAL_PADDING_DP = 6
+
+        /** Window height for [lines] text lines, in dp. */
+        internal fun capsuleHeightDp(lines: Int): Int =
+            (2 * CAPSULE_VERTICAL_PADDING_DP + TITLE_LINE_DP +
+                BODY_LINE_DP * (lines.coerceIn(OVERLAY_MIN_LINES, OVERLAY_MAX_LINES) - 1))
+                .toInt()
+
+        // [T-android-overlay-pill-shape] Corner radius: a true pill while the
+        // card is short, then held at this value so a 6-line card stays a
+        // rounded rectangle instead of becoming an oval.
+        private const val CAPSULE_CORNER_RADIUS_DP = 32f
+
+        // Leading padding. It used to be 15dp so the spinner ring was as far
+        // from the left edge as from its top and bottom; with no ring there is
+        // nothing to centre against, so it matches the trailing side again.
+        private const val CAPSULE_PADDING_START_DP = 16
+        // Everything in the capsule's row that is not text, besides the leading
+        // padding: close glyph 18 + its left margin 10 + right padding 16 (the
+        // inset that clears the pill's rounded corner).
+        private const val CAPSULE_NON_TEXT_DP = 44
 
         /**
          * [T-android-overlay-multitask-pill] Nominal height of the "n of m"
          * chip, used only to derive its corner radius (radius = half height,
          * the same rule the capsule itself follows). The view is WRAP_CONTENT,
-         * so this does not size it: 10sp text plus 1dp of vertical padding
-         * lands within a dp or two of 16, and any radius at or above half the
+         * so this does not size it: 11sp text plus 1dp of vertical padding
+         * lands within a dp or two of 18, and any radius at or above half the
          * real height renders as a full pill anyway.
          */
-        private const val TASK_PILL_HEIGHT_DP = 16
+        private const val TASK_PILL_HEIGHT_DP = 18
         // [T-android-overlay-fixed-half-width] User-facing requirement:
-        // the capsule must be a fixed half-screen-wide pill — no jitter
-        // as content cycles through spinner / completed / reply / error.
-        // 0.50 of displayMetrics.widthPixels, floored at
-        // CAPSULE_WIDTH_FLOOR_DP for tiny screens. Applied to the
+        // the capsule has a FIXED width — no jitter as content cycles
+        // through spinner / completed / reply / error. Applied to the
         // WindowManager.LayoutParams.width AND to the text-row maxWidth
         // so labels ellipsize within the same envelope instead of
         // pushing the box outward.
-        private const val CAPSULE_WIDTH_FRACTION = 0.50f
-        private const val CAPSULE_WIDTH_FLOOR_DP = 180
+        //
+        // [T-android-overlay-enlarged] "Fixed" is what this is about; the
+        // fraction was not the earlier half-screen value because the capsule
+        // is now the larger one the user asked for: 0.72 of the display width.
+        private const val CAPSULE_WIDTH_FRACTION = 0.72f
+        private const val CAPSULE_WIDTH_FLOOR_DP = 200
         // [T-android-overlay-landscape-width-rotation-drift] Upper bound on
         // the capsule width. In landscape `widthPixels` is large, so the
-        // 0.50 fraction alone produced a pill that visually spanned most of
+        // width fraction alone produced a pill that visually spanned most of
         // the screen.
         //
         // [T-android-overlay-wide-screen-width] The ceiling was 400dp, which
         // still read as "巨长" on landscape phones and tablets. 400dp is about
-        // DOUBLE the portrait-phone capsule (a 393dp Pixel gives 196dp, a
-        // 411dp Xiaomi gives 206dp), so the pill grew markedly whenever the
-        // screen got wider — which is exactly the complaint, even though the
-        // cap was technically doing its job.
+        // DOUBLE the portrait-phone capsule, so the pill grew markedly whenever
+        // the screen got wider — which is exactly the complaint, even though
+        // the cap was technically doing its job.
         //
-        // The reference the user gave is the portrait-phone look, so the
-        // ceiling is now 240dp: a little roomier than a portrait phone (so a
-        // wide screen is not actively *worse* than a narrow one) while
-        // staying a compact pill rather than a banner. Measured result:
+        // The rule the ceiling enforces is that a wide screen gets a pill of
+        // roughly the SAME absolute size as a portrait phone, not a
+        // proportionally wider one. [T-android-overlay-enlarged] raised both
+        // ends together (portrait 196dp -> 283dp), so the ceiling moved with
+        // them to 300dp — 17dp above a Pixel portrait, still nowhere near the
+        // 47%-of-the-screen banner that was reported. Measured result:
         //
-        //   phone portrait  393dp -> 196dp (50%, unchanged — fraction binds)
-        //   phone landscape 851dp -> 240dp (28%, was 400dp/47%)
-        //   tablet portrait 800dp -> 240dp (30%, was 400dp/50%)
-        //   tablet landscape 1280dp -> 240dp (19%, was 400dp/31%)
+        //   phone portrait  393dp -> 283dp (72%, was 196dp/50%)
+        //   phone landscape 851dp -> 300dp (35%, was 240dp)
+        //   tablet portrait 800dp -> 300dp (38%, was 240dp)
+        //   tablet landscape 1280dp -> 300dp (23%, was 240dp)
         //
-        // Portrait phones are untouched: 0.50 of 393dp is 196dp, well under
-        // the ceiling, so the only configurations that move are the wide ones
-        // this bug is about. The 0.70 fraction is kept for very narrow screens
-        // where 240dp could otherwise exceed the display.
-        private const val CAPSULE_WIDTH_CAP_FRACTION = 0.70f
-        private const val CAPSULE_WIDTH_CAP_DP = 240
-        private val RING_COLOR = Color.argb(230, 120, 200, 255)
-        // [T-overlay-ring-track] The track is the arc's own blue, faint: one
-        // colour family, so the arc reads as the lit part of the ring.
-        private val RING_TRACK_COLOR = Color.argb(RING_TRACK_ALPHA, 120, 200, 255)
-        // [T-overlay-logo-disc] Opaque backing disc for a Soul image or emoji:
-        // the app's dark "one step above #1C1C1E" surface (#2C2C2E), the same
-        // value DarkChatPalette / the dark grouped-card palette use, since the
-        // capsule fill itself is #1C1C1E. It replaces the image's average
-        // colour at alpha 38, which for a multi-coloured avatar came out as a
-        // warm brown translucent disc that read as a sticker on the cool grey
-        // capsule (user report on #333). Opaque, so a transparent PNG is
-        // filled before the circle clip and reads as one full round avatar.
-        private val LOGO_DISC_COLOR = com.openminis.app.ui.theme.DarkChatPalette.sheetHeaderBg.toArgb()
+        // The 0.80 fraction is kept for very narrow screens where 300dp could
+        // otherwise exceed the display.
+        private const val CAPSULE_WIDTH_CAP_FRACTION = 0.80f
+        private const val CAPSULE_WIDTH_CAP_DP = 300
         private val SUCCESS_COLOR = Color.parseColor("#4CAF50")
         private val FAILURE_COLOR = Color.parseColor("#E53935")
     }
@@ -256,19 +200,6 @@ class ToolOverlayController(private val context: Context) {
     }
 
     private var view: View? = null
-    private var logoView: ImageView? = null
-    // [T-android-overlay-icon-plate] Tinted disc behind the identity/tool
-    // glyph; see its construction for why it exists.
-    private var plateView: View? = null
-    private var ringView: RotatingRingView? = null
-    // [T-overlay-logo-night-refresh] What the logo was last painted with, so a
-    // night-mode switch can repaint it: the overlay is NOT rebuilt on a
-    // configuration change, and applyLogoFor otherwise only runs on a state
-    // update - a capsule waiting on a slow reply kept the launcher mark's
-    // old day / night variant indefinitely.
-    private var lastLogoToolName: String? = null
-    private var logoAppliedNight: Boolean = false
-    private var ringAnimator: ObjectAnimator? = null
     private var labelView: TextView? = null
     private var statusView: TextView? = null
 
@@ -293,12 +224,21 @@ class ToolOverlayController(private val context: Context) {
     // instead of a plain status string, so the row needs its own container
     // (to show/hide both children together) and a handle on the icon.
     private var statusRowView: LinearLayout? = null
-    // [T-android-overlay-reply-row] Row 2's completion-state leading glyph,
-    // shown once the run is over.
+    // [T-android-overlay-line-count] The reply row: everything past the title
+    // and the current step. Its leading ✓/✗ is the outcome glyph, which used to
+    // lead row 2 back when row 2 doubled as the reply line.
+    private var replyRowView: LinearLayout? = null
+    private var replyView: TextView? = null
     private var replyGlyphView: StatusGlyphView? = null
-    // [T-android-overlay-soul-identity] Memoized emoji raster, keyed by
-    // (glyph, size) — see emojiBitmap for why this is worth caching.
-    private var cachedEmojiBitmap: Pair<Pair<String, Int>, Bitmap>? = null
+
+    /**
+     * [T-android-overlay-line-count] Text lines the capsule reserves, owned by
+     * Settings ([com.openminis.app.data.repository.BackgroundSettingsRepository.overlayLineCount])
+     * and pushed in through [setLineCount]. Held as a plain field because the
+     * height is baked into the WindowManager.LayoutParams at attach time, and
+     * the rows' maxLines at build time.
+     */
+    private var lineCount: Int = OVERLAY_MIN_LINES
     private var closeView: View? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     // [T-android-overlay-reply-status-34599] Session ID associated with
@@ -322,6 +262,38 @@ class ToolOverlayController(private val context: Context) {
 
     fun hasOverlayPermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+
+    /**
+     * [T-android-overlay-line-count] Apply the user's line-count choice.
+     *
+     * Called by [AgentForegroundService] before every `show()`, and it is a
+     * no-op when the value did not move — the service re-emits on any observed
+     * flow change, so without the guard a settings write would resize a
+     * capsule that is already correct.
+     *
+     * A shown capsule is re-laid-out in place: the window height comes from
+     * [lineCount], so the answer to "how many lines does the user want" is only
+     * complete once the window itself is resized. The rows' maxLines are
+     * re-applied by [updateContent] on the `show()` that follows.
+     */
+    fun setLineCount(lines: Int) {
+        val safe = lines.coerceIn(OVERLAY_MIN_LINES, OVERLAY_MAX_LINES)
+        if (safe == lineCount) return
+        lineCount = safe
+        mainHandler.post {
+            val v = view ?: return@post
+            val params = layoutParams ?: return@post
+            val height = dpToPx(capsuleHeightDp(safe))
+            if (params.height == height) return@post
+            params.height = height
+            v.background = capsuleBackground(v.resources.displayMetrics.density)
+            try {
+                windowManager.updateViewLayout(v, params)
+            } catch (e: Throwable) {
+                Log.w(TAG, "setLineCount relayout failed: ${e.message}")
+            }
+        }
+    }
 
     /**
      * [T-port-sched-overlay-waiting] What the capsule shows while a chat waits
@@ -410,8 +382,6 @@ class ToolOverlayController(private val context: Context) {
         mainHandler.post {
             val v = view ?: return@post
             try {
-                ringAnimator?.cancel()
-                ringAnimator = null
                 windowManager.removeView(v)
             } catch (e: Throwable) {
                 Log.w(TAG, "removeView failed: ${e.message}")
@@ -422,12 +392,11 @@ class ToolOverlayController(private val context: Context) {
             elapsedView?.stop()
             elapsedView = null
             view = null
-            logoView = null
-            plateView = null
-            ringView = null
             labelView = null
             statusView = null
             statusRowView = null
+            replyView = null
+            replyRowView = null
             replyGlyphView = null
             closeView = null
             layoutParams = null
@@ -451,10 +420,10 @@ class ToolOverlayController(private val context: Context) {
             // states. Text rows inside ellipsize within this envelope —
             // see updateContent maxWidth assignment.
             fixedCapsuleWidthPx(),
-            // [T-android-overlay-dimensions-stable] Fixed height so the
-            // capsule doesn't jitter as content cycles through spinner /
-            // completed / reply / error states.
-            dpToPx(CAPSULE_HEIGHT_DP),
+            // [T-android-overlay-dimensions-stable] Fixed height for the chosen
+            // line count, so the capsule doesn't jitter as content cycles
+            // through spinner / completed / reply / error states.
+            dpToPx(capsuleHeightDp(lineCount)),
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -486,6 +455,24 @@ class ToolOverlayController(private val context: Context) {
         isShown = true
     }
 
+    /**
+     * The capsule's fill. Its corner radius is the one thing that depends on
+     * [lineCount], so [setLineCount] rebuilds it rather than the whole view.
+     *
+     * [T-android-overlay-pill-shape] Half the height while the card is short (a
+     * true pill), then capped so a 6-line card stays a rounded rectangle
+     * instead of becoming an oval.
+     */
+    private fun capsuleBackground(density: Float): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = minOf(
+            capsuleHeightDp(lineCount) / 2f,
+            CAPSULE_CORNER_RADIUS_DP,
+        ) * density
+        setColor(Color.argb(230, 28, 28, 30))
+        setStroke(dpToPx(1), Color.argb(40, 255, 255, 255))
+    }
+
     private fun buildView(): View {
         val density = context.resources.displayMetrics.density
         val container = LinearLayout(context).apply {
@@ -496,22 +483,12 @@ class ToolOverlayController(private val context: Context) {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             // Right padding is larger than the symmetric 6dp baseline so
             // the trailing X close button clears the pill's rounded corner.
-            // With CAPSULE_HEIGHT_DP=46 the corner radius is 23dp; a 6dp
-            // right inset put the X glyph's top/bottom corners behind the
-            // curve. ~14dp gives the 14dp glyph full clearance.
-            // [T-overlay-ring-even-margins] Left padding is larger too, so the
-            // spinner ring is as far from the left edge as from the top and
-            // bottom; top and bottom stay 6dp.
-            setPadding(dpToPx(CAPSULE_PADDING_START_DP), dpToPx(6), dpToPx(14), dpToPx(6))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                // [T-android-overlay-pill-shape] Corner radius tracks
-                // half the capsule height so the shape stays a true pill
-                // regardless of CAPSULE_HEIGHT_DP tuning.
-                cornerRadius = (CAPSULE_HEIGHT_DP / 2f) * density
-                setColor(Color.argb(230, 28, 28, 30))
-                setStroke(dpToPx(1), Color.argb(40, 255, 255, 255))
-            }
+            // [T-android-overlay-no-icon] Left padding used to be wider than
+            // the right so the spinner ring was equidistant from the left edge
+            // and from the top and bottom; with no ring it matches the right
+            // side again, and the text starts at the same inset it ends at.
+            setPadding(dpToPx(CAPSULE_PADDING_START_DP), dpToPx(CAPSULE_VERTICAL_PADDING_DP), dpToPx(14), dpToPx(CAPSULE_VERTICAL_PADDING_DP))
+            background = capsuleBackground(density)
             elevation = 8f * density
             gravity = Gravity.CENTER_VERTICAL
             // [T-android-overlay-fixed-half-width] The capsule width is
@@ -524,96 +501,11 @@ class ToolOverlayController(private val context: Context) {
             minimumWidth = dpToPx(120)
         }
 
-        // [T-bg-overlay-polish] Logo + rotating ring stacked in a
-        // FrameLayout. The logo is clipped to a circle via
-        // ViewOutlineProvider; the ring is a custom View drawing a thin
-        // arc that we rotate with an ObjectAnimator.
-        val logoSize = dpToPx(LOGO_SIZE_DP)
-        // [T-overlay-ring-outside] Ring view is larger than the logo box so
-        // the ring runs outside the logo circle. The box is rounded up to
-        // whole pixels; the radius the ring is drawn at is exact.
-        val ringStrokePx = RING_STROKE_DP * density
-        val ringGapPx = RING_GAP_DP * density
-        val ringTotal = OverlayRingGeometry.ringBoxPx(logoSize, ringGapPx, ringStrokePx)
-        val logoStack = FrameLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(logoSize, logoSize).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                rightMargin = dpToPx(6)
-            }
-            // The ring overhangs this box by (ringTotal - logoSize) / 2 on
-            // every side; let it draw there instead of being clipped.
-            clipChildren = false
-        }
-        // ...and let that overhang draw into the capsule's own padding (the
-        // container clips children to its padding box by default).
-        container.clipChildren = false
-        container.clipToPadding = false
-
-        // [T-android-overlay-icon-plate] Circular backing plate, BENEATH the
-        // icon in the same FrameLayout. Two jobs:
-        //
-        //  - it gives a transparent glyph or emoji something to sit on, so the
-        //    art reads as resting on a disc rather than floating on the
-        //    capsule's dark fill;
-        //  - being a true circle drawn at the ring's own diameter, it visually
-        //    closes the gap between art and ring that made square-ish glyphs
-        //    look like they were poking through the stroke.
-        //
-        // A GradientDrawable OVAL rather than another clipToOutline view: it is
-        // one drawable whose colour we re-tint per state, with no extra layer
-        // to keep in sync.
-        val plate = View(context).apply {
-            layoutParams = FrameLayout.LayoutParams(logoSize, logoSize).apply {
-                gravity = Gravity.CENTER
-            }
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.TRANSPARENT)
-            }
-            visibility = View.GONE
-        }
-        plateView = plate
-        logoStack.addView(plate)
-
-        val logo = ImageView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(logoSize, logoSize).apply {
-                gravity = Gravity.CENTER
-            }
-            // [T-android-overlay-dynamic-logo] This is the IDLE / completed
-            // rendering. While a tool runs, applyLogoFor() swaps in that
-            // tool's glyph; see it for why the scaleType and padding have to
-            // change along with the drawable.
-            setImageResource(R.mipmap.ic_launcher)
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            // Clip to a circle. `clipToOutline = true` + a circular
-            // outline provider is the standard API-21+ recipe and avoids
-            // having to allocate a BitmapShader for the launcher.
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(v: View, outline: Outline) {
-                    outline.setOval(0, 0, v.width, v.height)
-                }
-            }
-            clipToOutline = true
-        }
-        logoView = logo
-        logoStack.addView(logo)
-
-        val ring = RotatingRingView(
-            context,
-            strokeWidthPx = ringStrokePx,
-            centreRadiusPx = OverlayRingGeometry.arcCentreRadiusPx(logoSize, ringGapPx, ringStrokePx),
-            ringColor = RING_COLOR,
-            trackColor = RING_TRACK_COLOR,
-        ).apply {
-            layoutParams = FrameLayout.LayoutParams(ringTotal, ringTotal).apply {
-                gravity = Gravity.CENTER
-            }
-            visibility = View.GONE
-        }
-        ringView = ring
-        logoStack.addView(ring)
-
-        container.addView(logoStack)
+        // [T-android-overlay-no-icon] The identity circle, its backing plate and
+        // the spinner ring that traced them used to be stacked here as the
+        // capsule's first child. The user asked for the icon gone, so the whole
+        // stack is gone with it and `textCol` is the capsule's only content
+        // child besides the trailing X.
 
         val textCol = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -649,8 +541,8 @@ class ToolOverlayController(private val context: Context) {
             ).apply { gravity = Gravity.CENTER_VERTICAL }
         }
 
-        // [T-android-overlay-clock-baseline] Row 1 seats the 12sp identity name
-        // beside the 10sp clock, so it must align them by TEXT BASELINE. A
+        // [T-android-overlay-clock-baseline] Row 1 seats the 14sp task title
+        // beside the 11sp chip, so it must align them by TEXT BASELINE. A
         // vertical gravity would centre each child's BOX instead, which is not
         // the same thing at different text sizes and measured 2px out on
         // device. LinearLayout aligns by baseline by default, so the correct
@@ -661,7 +553,10 @@ class ToolOverlayController(private val context: Context) {
 
         val label = TextView(context).apply {
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            // [T-android-overlay-enlarged] 12sp -> 14sp: the task title is the
+            // line the user reads off-screen, and at 12sp it was the reported
+            // "看不清 / 太小" of the capsule.
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             text = ""
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -697,7 +592,7 @@ class ToolOverlayController(private val context: Context) {
         // measured.
         val elapsed = Chronometer(context).apply {
             setTextColor(Color.argb(200, 220, 220, 220))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             // [T-android-overlay-elapsed-vertical-wrap] A Chronometer is a
             // TextView, and an unconstrained TextView squeezed to zero width
             // does not clip — it WRAPS, one character per line. Measured on
@@ -721,10 +616,10 @@ class ToolOverlayController(private val context: Context) {
                 leftMargin = dpToPx(6)
                 // [T-android-overlay-clock-baseline] No vertical gravity here:
                 // a per-child gravity overrides the row's baseline alignment
-                // for that child, which is the offset this fixes. Both this
-                // view and the status text beside it are 10sp, so they would
-                // agree either way — but leaving it off keeps them correct if
-                // either text size is ever tuned.
+                // for that child, which is the offset this fixes. This clock is
+                // 11sp against the 12sp status text beside it, so the two do NOT
+                // agree by size — leaving gravity off is what keeps the pair on
+                // one baseline.
             }
             visibility = View.GONE
         }
@@ -741,7 +636,7 @@ class ToolOverlayController(private val context: Context) {
         // and costs the title characters it cannot spare.
         val taskIndex = TextView(context).apply {
             setTextColor(Color.argb(200, 220, 220, 220))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             text = ""
             maxLines = 1
             // No ellipsize: this is a handful of digits inside a fixed pill.
@@ -775,8 +670,8 @@ class ToolOverlayController(private val context: Context) {
         textCol.addView(labelRow)
 
 
-        // [T-android-overlay-two-row] Second (and final) row: what the turn is
-        // doing right now. Its content varies by state:
+        // [T-android-overlay-line-count] Second row: the STEP the turn is on.
+        // Its content varies by state:
         //
         //   tool running — the model-supplied tool_title, e.g. "Open Baidu
         //                  home page". Replaces the old generic
@@ -784,44 +679,30 @@ class ToolOverlayController(private val context: Context) {
         //                  internal identifier rather than the work.
         //   streaming    — a localized "generating" line, for the stretch where
         //                  the model is producing text with no tool in flight.
-        //   completed    — a tick glyph, then an excerpt of the assistant's
-        //                  last reply. Once the tool has finished, its title is
-        //                  stale news and row 1 already carries the outcome;
-        //                  the reply is what the user actually wants off-screen.
+        //   completed    — the step that just finished, still named here; the
+        //                  reply moved down to its own row below.
         //
-        // [T-android-overlay-streaming-state] Only the completed variant draws
-        // a leading glyph. The two working variants are text-only: the tool's
-        // icon lives in the capsule's leading circle (see applyLogoFor), and
-        // drawing it again here put the same glyph on the same capsule twice.
+        // The row is text-only. It used to lead with the outcome ✓/✗, but that
+        // glyph marks the RESULT, so it now leads the reply row instead — and
+        // the tool's own icon is gone with the capsule's identity circle
+        // ([T-android-overlay-no-icon]).
         val statusRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             // [T-android-overlay-multitask] The clock is back on this row, so
-            // this is a 10sp status text beside a 10sp clock. Equal sizes make
-            // box-centring and baseline alignment agree, and an explicit
-            // gravity keeps the leading glyph (which has no baseline) centred.
+            // this is a 12sp status text beside an 11sp clock, and an explicit
+            // gravity keeps the row's children centred.
+            // [T-android-overlay-line-count] Centring rather than
+            // baseline-aligning also keeps this row honest when the clock grows
+            // a digit mid-run.
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        // [T-android-overlay-reply-row] Completion-state leading glyph. Reuses
-        // StatusGlyphView — the same tick/cross the label row draws — so the
-        // two rows cannot drift apart in shape or stroke weight.
-        val replyGlyph = StatusGlyphView(context).apply {
-            val s = dpToPx(TOOL_ICON_SIZE_DP)
-            layoutParams = LinearLayout.LayoutParams(s, s).apply {
-                rightMargin = dpToPx(4)
-                // [T-android-overlay-timer-row2] A View with no text has no
-                // baseline for the row to align to, so this one keeps an
-                // explicit vertical gravity of its own.
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            visibility = View.GONE
-        }
-        replyGlyphView = replyGlyph
-        statusRow.addView(replyGlyph)
-
         val status = TextView(context).apply {
             setTextColor(Color.argb(200, 220, 220, 220))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            // [T-android-overlay-line-count] Row 2 is the STEP line and stays
+            // one line: what the extra lines the user picked are for is the
+            // reply, not a second helping of tool title.
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             text = ""
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -860,6 +741,50 @@ class ToolOverlayController(private val context: Context) {
         statusRowView = statusRow
         textCol.addView(statusRow)
 
+        // [T-android-overlay-line-count] Row 3+: the assistant's reply, which
+        // is the only content long enough to want the extra lines. It gets
+        // every line past the title and the step, so a 3-line capsule gives it
+        // one and a 6-line capsule gives it four.
+        //
+        // [T-android-overlay-reply-row] Its leading glyph is the outcome
+        // ✓/✗, which used to lead row 2 back when row 2 doubled as the reply
+        // line. Reuses StatusGlyphView — the same tick/cross the label row
+        // draws — so the two cannot drift apart in shape or stroke weight.
+        val replyRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+        }
+        val replyGlyph = StatusGlyphView(context).apply {
+            val s = dpToPx(TOOL_ICON_SIZE_DP)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply {
+                rightMargin = dpToPx(4)
+                // A View with no text has no baseline for the row to align to,
+                // so this one keeps an explicit vertical gravity of its own.
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            visibility = View.GONE
+        }
+        replyGlyphView = replyGlyph
+        replyRow.addView(replyGlyph)
+
+        val reply = TextView(context).apply {
+            setTextColor(Color.argb(200, 220, 220, 220))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            text = ""
+            maxLines = (lineCount - 2).coerceAtLeast(1)
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        replyView = reply
+        // weight=1 for the same reason as the other two rows: the reply is the
+        // longest string the capsule carries, and it must wrap inside the
+        // envelope rather than push the box.
+        replyRow.addView(
+            reply,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        replyRowView = replyRow
+        textCol.addView(replyRow)
+
         container.addView(textCol)
 
         // [T-android-overlay-reply-status-34599] Trailing X button to
@@ -869,7 +794,9 @@ class ToolOverlayController(private val context: Context) {
         // drag listener (separate setOnClickListener) so tapping it
         // doesn't initiate a drag.
         val closeBtn = CloseGlyphView(context).apply {
-            val s = dpToPx(14)
+            // [T-android-overlay-enlarged] 14dp -> 18dp with the capsule; it
+            // also widens the tap area of a button that was fiddly to hit.
+            val s = dpToPx(18)
             layoutParams = LinearLayout.LayoutParams(s, s).apply {
                 leftMargin = dpToPx(10)
                 gravity = Gravity.CENTER_VERTICAL
@@ -951,8 +878,8 @@ class ToolOverlayController(private val context: Context) {
             // keeping the row from ever rendering blank.
             //
             // The completion case is unchanged in spirit but no longer
-            // replaces the title: the outcome is shown by the leading glyph
-            // (see applyLogoFor / StatusGlyphView), so a finished task keeps
+            // replaces the title: the outcome is shown by the reply row's
+            // leading glyph (StatusGlyphView), so a finished task keeps
             // its name instead of collapsing to a bare "执行完成" that says
             // nothing about WHICH task finished — unreadable once more than
             // one is on screen.
@@ -991,50 +918,41 @@ class ToolOverlayController(private val context: Context) {
                 tv.visibility = View.GONE
             }
         }
-        // [T-android-overlay-reply-row] Row 2 carries different content per
-        // state — see the row's construction comment for why.
+        // [T-android-overlay-line-count] The rows split by scope, and the reply
+        // has its own row now instead of replacing the step line:
         //
-        //   running   → tool icon + tool title, matching the chat stream's
-        //               tool pill. Title precedence is the pill's own: the
-        //               model-supplied tool_title, else the humanized tool name
-        //               (friendlyToolTitleFor). Never the raw "Running: <name>".
-        //   completed → outcome tick + the assistant's reply excerpt.
+        //   row 1  the TASK — its title, and "n of m" when several are live.
+        //   row 2  the STEP — the model-supplied tool_title, else the humanized
+        //          tool name (friendlyToolTitleFor), else the streaming /
+        //          waiting word. Never the raw "Running: <name>".
+        //   row 3+ the REPLY — the assistant's last message, which is what the
+        //          extra lines the user picked are for.
         //
-        // The completed branch needs a non-blank excerpt to have anything to
-        // say. When the run is over and no excerpt arrived, the row hides
-        // rather than falling back to the finished tool's title: row 1 already
-        // shows the outcome, and a stale title beneath it reads as if the tool
-        // were still going.
+        // Before this, completion swapped row 2's content for the reply, so the
+        // user could not see which step had just finished; with a reply row of
+        // its own both read at once.
         val rowToolName = toolName
-        val replyText = replyExcerpt?.takeIf { it.isNotBlank() }
-        val showReplyVariant = !isRunning && replyText != null
+        val replyText = replyExcerpt?.takeIf { it.isNotBlank() }?.takeUnless { isWaiting }
 
         // [T-android-overlay-streaming-state] A turn has three working shapes,
-        // not two, and the capsule now tells them apart:
+        // not two, and the capsule tells them apart:
         //
-        //   tool running  — a named tool is executing. Leading circle shows
-        //                   that tool's glyph; row 2 shows its title.
-        //   streaming     — the model is producing text with no tool in
-        //                   flight. Leading circle shows the Minis mark (there
-        //                   is no tool to depict) and row 2 says so.
-        //   completed     — handled by showReplyVariant below.
+        //   tool running — a named tool is executing; row 2 shows its title.
+        //   streaming    — the model is producing text with no tool in flight;
+        //                  row 2 says so (thinking vs generating).
+        //   completed    — row 2 keeps the finished step's title, row 3 carries
+        //                  the reply.
         //
-        // Deciding this needs isToolRunning, not isRunning: isRunning is true
-        // for BOTH working shapes. And it cannot be inferred from toolName
+        // Deciding streaming vs tool needs isToolRunning, not isRunning:
+        // isRunning is true for BOTH. And it cannot be inferred from toolName
         // either, because the service passes lastToolName so the finished tool
         // can still be named — during a post-tool streaming stretch that name
-        // is still set, which is exactly how a stale tool glyph used to sit on
-        // a capsule that was really just talking.
+        // is still set, which is how a stale tool line used to sit on a capsule
+        // that was really just talking.
         val showStreamingVariant = isRunning && !isToolRunning
-
-        // [T-android-overlay-dynamic-logo] The leading circle follows the tool
-        // that is running RIGHT NOW, and reverts to the Minis mark otherwise —
-        // which now includes the streaming stretch, not just completion.
-        applyLogoFor(if (isToolRunning) rowToolName else null)
 
         val rowTitle: String? = when {
             isWaiting -> waiting!!.statusText
-            showReplyVariant -> replyText
             // [T-android-live-update-content] Distinguish reasoning from
             // visible output, as the iOS Dynamic Island does.
             showStreamingVariant -> context.getString(
@@ -1051,7 +969,7 @@ class ToolOverlayController(private val context: Context) {
         // those outcomes shows as text alone rather than with a misleading
         // tick. Row 1 states the outcome in words either way.
         val replyGlyphState: Pair<StatusGlyphView.State, Int>? =
-            if (!showReplyVariant || isWaiting) null else when (outcome) {
+            if (replyText == null || isRunning) null else when (outcome) {
                 ToolOutcome.Success -> StatusGlyphView.State.Success to SUCCESS_COLOR
                 ToolOutcome.Error, ToolOutcome.Timeout ->
                     StatusGlyphView.State.Error to FAILURE_COLOR
@@ -1069,26 +987,34 @@ class ToolOverlayController(private val context: Context) {
                 sv.visibility = View.GONE
             }
         }
+        val showReplyRow = replyText != null
+        replyRowView?.visibility = if (showReplyRow) View.VISIBLE else View.GONE
+        replyView?.let { rv ->
+            rv.text = replyText ?: ""
+            // Re-applied per update because the setting can change between
+            // attaches without the capsule being rebuilt.
+            rv.maxLines = (lineCount - 2).coerceAtLeast(1)
+        }
         replyGlyphView?.let { gv ->
             val st = replyGlyphState
-            if (showToolRow && st != null) {
+            if (st != null) {
                 gv.setState(st.first, st.second)
                 gv.visibility = View.VISIBLE
             } else {
                 gv.visibility = View.GONE
             }
         }
-        // [T-android-overlay-fixed-half-width] maxWidth tracks the same
-        // fixed half-screen envelope as the WM container, minus the
-        // logo + paddings + trailing close button so text ellipsizes
-        // before it can push the (now-fixed-width) box. Subtract the left
-        // pad, then 26+6 (logo + logo-right-margin) + 14+10 (close +
-        // close-left-margin) + 14 (right pad clearing the pill corner).
-        // [T-overlay-ring-even-margins] Derived from the left padding, so
-        // widening it shrinks the text cap by the same amount (76 -> 80dp).
+        // [T-android-overlay-fixed-half-width] maxWidth tracks the same fixed
+        // envelope as the WM container, minus the leading pad and the trailing
+        // close button, so text wraps or ellipsizes inside the box instead of
+        // pushing it open.
+        // [T-android-overlay-no-icon] The logo's 34dp + 6dp margin dropped out
+        // of the subtraction when the icon did, which is where the reply row's
+        // extra characters per line come from.
         val maxW = (fixedCapsuleWidthPx() - dpToPx(CAPSULE_PADDING_START_DP + CAPSULE_NON_TEXT_DP)).coerceAtLeast(dpToPx(80))
         labelView?.maxWidth = maxW
         statusView?.maxWidth = maxW
+        replyView?.maxWidth = maxW
 
         // [T-android-overlay-reply-status-34599] The X close button is
         // useful only once the user has something to dismiss — while a
@@ -1171,18 +1097,6 @@ class ToolOverlayController(private val context: Context) {
             }
         }
 
-        val ring = ringView
-        if (ring != null) {
-            if (isRunning) {
-                if (ring.visibility != View.VISIBLE) ring.visibility = View.VISIBLE
-                if (ringAnimator?.isStarted != true) startRingAnimation(ring)
-            } else {
-                if (ring.visibility != View.GONE) ring.visibility = View.GONE
-                ringAnimator?.cancel()
-                ringAnimator = null
-            }
-        }
-
         equaliseRightColumn()
     }
 
@@ -1236,191 +1150,6 @@ class ToolOverlayController(private val context: Context) {
         }
     }
 
-    /**
-     * [T-android-overlay-dynamic-logo] Point the leading circle at either the
-     * running tool's glyph or the Minis launcher icon.
-     *
-     * The two drawables need DIFFERENT presentation, which is why this is not
-     * a bare setImageResource:
-     *
-     *  - the launcher icon is a full-bleed bitmap, so it wants CENTER_CROP and
-     *    no padding — it is meant to fill the circle edge to edge;
-     *  - a tool glyph is line art on a transparent ground. Under CENTER_CROP
-     *    the circular clip would shave its extremities (the terminal's bracket,
-     *    the globe's rim), so it wants FIT_CENTER plus a little inset to keep
-     *    the strokes clear of the clip boundary.
-     *
-     * Getting this wrong is not a crash, it is a subtly chewed-looking icon,
-     * so the two cases are set explicitly rather than sharing a default.
-     *
-     * The rotating ring is unaffected — it is a sibling in the FrameLayout and
-     * keeps spinning around whatever this view shows.
-     */
-    private fun applyLogoFor(toolName: String?) {
-        val iv = logoView ?: return
-        lastLogoToolName = toolName
-        logoAppliedNight = isNightNow()
-        if (toolName == null) {
-            iv.setPadding(0, 0, 0, 0)
-            iv.scaleType = ImageView.ScaleType.CENTER_CROP
-            iv.clearColorFilter()
-            applySoulIdentityIcon(iv)
-            return
-        }
-        // [T-android-overlay-icon-plate] Inset so the drawn art stays clear of
-        // the ring stroke — see GLYPH_INSET_FRACTION for why 18% was not
-        // enough for the wider glyphs.
-        val inset = (dpToPx(LOGO_SIZE_DP) * GLYPH_INSET_FRACTION).toInt()
-        iv.setPadding(inset, inset, inset, inset)
-        iv.scaleType = ImageView.ScaleType.FIT_CENTER
-        val accent = toolAccentColorInt(toolName)
-        iv.setImageResource(toolIconResFor(toolName))
-        iv.setColorFilter(accent)
-        // The plate takes the tool's own accent at low alpha, so a green
-        // terminal sits on a faint green disc and a blue globe on a faint blue
-        // one. Low alpha rather than a hand-picked pale colour: it composites
-        // against the capsule's dark fill, which keeps it muted and tied to the
-        // surface instead of reading as a bright sticker laid on top.
-        applyPlate(Color.argb(PLATE_ALPHA, Color.red(accent), Color.green(accent), Color.blue(accent)))
-    }
-
-    /** [T-android-overlay-icon-plate] Tint the disc, or hide it entirely. */
-    private fun applyPlate(color: Int?) {
-        val pv = plateView ?: return
-        if (color == null) {
-            pv.visibility = View.GONE
-            return
-        }
-        (pv.background as? GradientDrawable)?.setColor(color)
-        pv.visibility = View.VISIBLE
-    }
-
-
-    /**
-     * [T-android-overlay-soul-identity] Paint the identity circle from the
-     * user's Soul icon, falling back to the launcher mark.
-     *
-     * The three branches mirror SoulIconGlyph (SoulSettingsScreen.kt), which is
-     * the authoritative renderer for this value — that one is @Composable and
-     * cannot be called from a View, so the BRANCHING is duplicated here while
-     * the actual decoding stays shared in SoulIcon. Keeping the decode in one
-     * place is what stops the two from disagreeing about what a given string
-     * means:
-     *
-     *   data URI  -> SoulIcon.decode() to a Bitmap
-     *   non-empty -> an emoji literal, rasterized below
-     *   empty     -> unset; keep the launcher icon exactly as before, so a user
-     *                who never touched Soul sees no change at all
-     *
-     * Note this deliberately does NOT reproduce SoulIconGlyph's rounded-rect
-     * clip. The capsule's circle is an established part of its own visual
-     * language (the rotating ring traces that exact circle), and the outline
-     * provider that produces it is applied to this ImageView once at build
-     * time. A Soul icon simply takes the place the launcher icon already held.
-     */
-    private fun applySoulIdentityIcon(iv: ImageView) {
-        val icon = SoulStore.cachedMetadata.value.icon
-        if (icon.isBlank()) {
-            // [T-android-overlay-icon-plate] The launcher mark is an opaque
-            // bitmap that fills the circle edge to edge, so a plate behind it
-            // would never be seen. Left unchanged, per the brief. Padding and
-            // scaleType are reset explicitly because the other branches set
-            // them and this view is reused across states.
-            applyLauncherMark(iv)
-            return
-        }
-        SoulIcon.decode(icon)?.let { bmp ->
-            // [T-overlay-logo-disc] Fill the whole circle: CENTER_CROP over an
-            // opaque neutral disc, then the circular outline clip. A
-            // transparent PNG's empty area shows the disc, so the avatar reads
-            // as one full round icon. It used to be inset 13% and FIT_CENTER on
-            // a translucent disc of its own average colour, which left a
-            // tinted band around shrunken art with its straight edges showing
-            // (#333). A square photo now loses its corners to the circle - the
-            // usual trade for a round avatar.
-            iv.setPadding(0, 0, 0, 0)
-            iv.scaleType = ImageView.ScaleType.CENTER_CROP
-            // Drop any tint left over from a tool glyph — this is the user's
-            // own artwork and must not be recoloured.
-            iv.clearColorFilter()
-            iv.setImageBitmap(bmp)
-            applyPlate(LOGO_DISC_COLOR)
-            return
-        }
-        // Not a data URI: an emoji literal. An ImageView cannot show text, so
-        // rasterize the glyph into a bitmap sized to the view's own box.
-        val px = dpToPx(LOGO_SIZE_DP)
-        emojiBitmap(icon, px)?.let {
-            iv.setPadding(0, 0, 0, 0)
-            iv.scaleType = ImageView.ScaleType.FIT_CENTER
-            iv.clearColorFilter()
-            iv.setImageBitmap(it)
-            // [T-overlay-logo-disc] Same opaque neutral disc as a Soul image,
-            // so every identity icon sits on one consistent round surface.
-            applyPlate(LOGO_DISC_COLOR)
-            return
-        }
-        applyLauncherMark(iv)
-    }
-
-    /** [T-android-overlay-icon-plate] Full-bleed launcher mark, no plate. */
-    private fun applyLauncherMark(iv: ImageView) {
-        iv.setPadding(0, 0, 0, 0)
-        iv.scaleType = ImageView.ScaleType.CENTER_CROP
-        iv.clearColorFilter()
-        iv.setImageResource(R.mipmap.ic_launcher)
-        applyPlate(null)
-    }
-
-    /** Night mode of the resources the logo drawables are loaded from. */
-    private fun isNightNow(): Boolean =
-        (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-            android.content.res.Configuration.UI_MODE_NIGHT_YES
-
-    /**
-     * [T-android-overlay-soul-identity] Draw an emoji into a square bitmap.
-     *
-     * Cached by (glyph, size) because this runs on every capsule refresh — a
-     * per-second Chronometer tick included — and allocating plus rasterizing a
-     * bitmap that often would be pure waste for a value that changes only when
-     * the user edits their Soul.
-     *
-     * The glyph is centred on the box's vertical CENTRE rather than its
-     * baseline: emoji have large and inconsistent descents, so baseline
-     * placement leaves them visibly high inside a circle.
-     */
-    private fun emojiBitmap(glyph: String, sizePx: Int): Bitmap? {
-        if (sizePx <= 0) return null
-        cachedEmojiBitmap?.let { (key, bmp) ->
-            if (key == glyph to sizePx) return bmp
-        }
-        return runCatching {
-            val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bmp)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                textAlign = Paint.Align.CENTER
-                // 0.72 keeps a tall glyph clear of the circular clip.
-                textSize = sizePx * 0.72f
-            }
-            val fm = paint.fontMetrics
-            val baseline = sizePx / 2f - (fm.ascent + fm.descent) / 2f
-            canvas.drawText(glyph, sizePx / 2f, baseline, paint)
-            cachedEmojiBitmap = (glyph to sizePx) to bmp
-            bmp
-        }.getOrNull()
-    }
-
-    private fun startRingAnimation(target: View) {
-        ringAnimator?.cancel()
-        ringAnimator = ObjectAnimator.ofFloat(target, View.ROTATION, 0f, 360f).apply {
-            duration = 1100L
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.RESTART
-            interpolator = android.view.animation.LinearInterpolator()
-            start()
-        }
-    }
-
     private fun attachTouchListener(target: View, params: WindowManager.LayoutParams) {
         val slopPx = (DRAG_SLOP_DP * context.resources.displayMetrics.density).toInt()
         var downX = 0f
@@ -1471,7 +1200,7 @@ class ToolOverlayController(private val context: Context) {
                             dm.widthPixels,
                             dm.heightPixels,
                             fixedCapsuleWidthPx(),
-                            dpToPx(CAPSULE_HEIGHT_DP),
+                            dpToPx(capsuleHeightDp(lineCount)),
                             systemBarAvoidance(dm.widthPixels, dm.heightPixels),
                         )
                         if (at.x != params.x || at.y != params.y) {
@@ -1588,13 +1317,10 @@ class ToolOverlayController(private val context: Context) {
     fun onConfigurationChanged() {
         mainHandler.post {
             val v = view ?: return@post
-            // [T-overlay-logo-night-refresh] Night mode flipped: reload the
-            // logo so the launcher mark shows its day / night variant now.
-            if (isNightNow() != logoAppliedNight) applyLogoFor(lastLogoToolName)
             val params = layoutParams ?: return@post
             val dm = context.resources.displayMetrics
             val width = fixedCapsuleWidthPx()
-            val height = dpToPx(CAPSULE_HEIGHT_DP)
+            val height = dpToPx(capsuleHeightDp(lineCount))
             val at = OverlayPosition.displayed(
                 positionStore,
                 defaultPosition(),
@@ -1604,8 +1330,11 @@ class ToolOverlayController(private val context: Context) {
                 height,
                 systemBarAvoidance(dm.widthPixels, dm.heightPixels),
             )
-            if (params.width == width && params.x == at.x && params.y == at.y) return@post
+            if (params.width == width && params.height == height &&
+                params.x == at.x && params.y == at.y
+            ) return@post
             params.width = width
+            params.height = height
             params.x = at.x
             params.y = at.y
             try {
@@ -1625,7 +1354,7 @@ class ToolOverlayController(private val context: Context) {
     private fun defaultPosition(): OverlayPosition.Point {
         val metrics = context.resources.displayMetrics
         val padding = dpToPx(EDGE_PADDING_DP)
-        val approxOverlayHeight = dpToPx(LOGO_SIZE_DP + 16)
+        val approxOverlayHeight = dpToPx(capsuleHeightDp(lineCount))
         val approxNavBar = dpToPx(48)
         return OverlayPosition.Point(
             padding,
@@ -1691,52 +1420,6 @@ class ToolOverlayController(private val context: Context) {
     private fun dpToPx(dp: Int): Int =
         (dp * context.resources.displayMetrics.density + 0.5f).toInt()
 
-    /**
-     * [T-overlay-ring-track] Spinner: a faint full-circle track with a short
-     * bright arc ([RING_SWEEP_DEG]) on it, both centred in the view at
-     * [centreRadiusPx]. Rotating the view itself (via ObjectAnimator on
-     * View.ROTATION) gives the spinning effect without per-frame
-     * invalidation; the track is a full circle, so it looks still.
-     */
-    private class RotatingRingView(
-        context: Context,
-        private val strokeWidthPx: Float,
-        private val centreRadiusPx: Float,
-        ringColor: Int,
-        trackColor: Int,
-    ) : View(context) {
-        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.BUTT
-            color = trackColor
-            strokeWidth = strokeWidthPx
-        }
-        private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            color = ringColor
-            strokeWidth = strokeWidthPx
-        }
-        private val rect = RectF()
-
-        override fun onDraw(canvas: Canvas) {
-            val cx = width / 2f
-            val cy = height / 2f
-            rect.set(cx - centreRadiusPx, cy - centreRadiusPx, cx + centreRadiusPx, cy + centreRadiusPx)
-            canvas.drawArc(rect, 0f, 360f, false, trackPaint)
-            // A short arc starting at the top; the long dark remainder is
-            // what makes the spinning visually obvious.
-            canvas.drawArc(rect, -90f, RING_SWEEP_DEG, false, arcPaint)
-        }
-    }
-
-    /**
-     * [T-android-overlay-reply-status-34599] Tiny close-X glyph used
-     * as the manual-dismiss button at the right edge of the capsule.
-     * Drawn via Path for parity with [StatusGlyphView] (no new vector
-     * drawable resource needed) and uses a lighter color so the user
-     * reads it as a chrome control rather than a status indicator.
-     */
     private class CloseGlyphView(context: Context) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -1803,66 +1486,6 @@ class ToolOverlayController(private val context: Context) {
             }
             canvas.drawPath(path, paint)
         }
-    }
-}
-
-/** Stroke of the spinner track and arc, in dp. */
-internal const val RING_STROKE_DP_VALUE = 1.5f
-
-/** Sweep of the bright spinner arc, in degrees. */
-internal const val RING_SWEEP_DEG = 100f
-
-/** Alpha (0-255) of the spinner's full-circle track. */
-internal const val RING_TRACK_ALPHA = 77
-
-/**
- * [T-overlay-ring-outside] Geometry of the spinner ring drawn OUTSIDE the logo
- * circle: the stroke's inner edge sits [gapPx] outside the logo's edge (0 = it
- * touches the logo) and the whole stroke lies on the capsule fill.
- */
-internal object OverlayRingGeometry {
-    /** Side of the ring view, in px: room for the stroke on every side, rounded up to whole pixels. */
-    fun ringBoxPx(logoPx: Int, gapPx: Float, strokePx: Float): Int =
-        logoPx + 2 * kotlin.math.ceil(gapPx + strokePx).toInt()
-
-    /** Radius of the stroke's centre line. Exact, not derived from the rounded box. */
-    fun arcCentreRadiusPx(logoPx: Int, gapPx: Float, strokePx: Float): Float = logoPx / 2f + gapPx + strokePx / 2f
-
-    /** Inner edge of the stroke: logo radius + gap. */
-    fun arcInnerRadiusPx(logoPx: Int, gapPx: Float, strokePx: Float): Float =
-        arcCentreRadiusPx(logoPx, gapPx, strokePx) - strokePx / 2f
-
-    /** Outer edge of the stroke; always inside the ring box. */
-    fun arcOuterRadiusPx(logoPx: Int, gapPx: Float, strokePx: Float): Float =
-        arcCentreRadiusPx(logoPx, gapPx, strokePx) + strokePx / 2f
-}
-
-/**
- * [T-overlay-ring-even-margins] Where the spinner ring sits in the capsule.
- * The ring's outer edge is the logo circle plus one stroke on every side; it
- * is centred vertically, and horizontally it starts one stroke left of the
- * logo box, i.e. inside the capsule's leading padding.
- */
-internal object OverlayMargins {
-    /** Gap between the ring's outer edge and the capsule's top (= bottom) edge. */
-    fun ringToTopDp(capsuleDp: Float, logoDp: Float, strokeDp: Float): Float =
-        (capsuleDp - (logoDp + 2 * strokeDp)) / 2f
-
-    /** Leading padding that puts the ring the same distance from the left edge as from the top. */
-    fun startPaddingDp(capsuleDp: Float, logoDp: Float, strokeDp: Float): Float =
-        ringToTopDp(capsuleDp, logoDp, strokeDp) + strokeDp
-
-    /** Gap between the ring's outer edge and the capsule's left edge, for a given leading padding. */
-    fun ringToStartPx(startPaddingPx: Int, strokePx: Float): Float = startPaddingPx - strokePx
-
-    /**
-     * Gaps above and below the ring in whole-pixel layout: the logo box is
-     * centred in the capsule (the odd pixel goes below), the ring overhangs
-     * it by one stroke.
-     */
-    fun ringToTopBottomPx(capsulePx: Int, logoPx: Int, strokePx: Float): Pair<Float, Float> {
-        val top = (capsulePx - logoPx) / 2
-        return (top - strokePx) to (capsulePx - logoPx - top - strokePx)
     }
 }
 

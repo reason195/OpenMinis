@@ -1261,6 +1261,9 @@
     <string name="settings_bg_overlay">后台任务悬浮窗</string>
     <string name="settings_bg_overlay_footer">Minis 处于后台时，显示一个小型悬浮胶囊展示当前工具。需要"显示在其他应用上层"权限。点击悬浮窗回到 Minis；拖拽可移动位置。</string>
     <string name="settings_bg_overlay_permission_needed">需先授予"显示在其他应用上层"权限</string>
+    <string name="settings_bg_overlay_lines">悬浮窗行数</string>
+    <string name="settings_bg_overlay_lines_value">%1$d 行</string>
+    <string name="settings_bg_overlay_lines_footer">第一行是任务标题，第二行是当前步骤，其余行给回复正文。行数越多，遮挡的内容也越多。</string>
     <string name="settings_dynamic_island">灵动岛（实时更新）</string>
     <string name="settings_dynamic_island_footer">在 Android 16 状态胶囊上显示实时的助手状态。开启后将取代悬浮窗，避免同时出现两个状态指示。</string>
     <string name="settings_scheduled_countdown">定时任务倒计时</string>

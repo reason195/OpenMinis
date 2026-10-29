@@ -1385,6 +1385,10 @@
     <string name="settings_bg_overlay">Background Task Overlay</string>
     <string name="settings_bg_overlay_footer">Show a small floating capsule with the current tool while Minis is in the background. Requires permission to display over other apps. Tap the capsule to bring Minis to the foreground; drag to move it.</string>
     <string name="settings_bg_overlay_permission_needed">Allow drawing over other apps to enable</string>
+    <!-- [T-android-overlay-line-count] How tall the capsule is, in text lines. -->
+    <string name="settings_bg_overlay_lines">Overlay lines</string>
+    <string name="settings_bg_overlay_lines_value">%1$d lines</string>
+    <string name="settings_bg_overlay_lines_footer">One line for the task, one for the current step, the rest for the reply. A taller capsule covers more of what is behind it.</string>
     <!-- [T-android-dynamic-island] Android 16 Live Updates / dynamic-island toggle. -->
     <string name="settings_dynamic_island">Dynamic Island (Live Updates)</string>
     <string name="settings_dynamic_island_footer">Show live Agent status on the Android 16 status chip. When on, this replaces the floating overlay so you don\'t see two status indicators at once.</string>

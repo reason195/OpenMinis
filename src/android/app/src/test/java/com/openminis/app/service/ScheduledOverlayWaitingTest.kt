@@ -52,7 +52,7 @@ class ScheduledOverlayWaitingTest {
         val c = ProductionSources.read("service/ToolOverlayController.kt")
         assertTrue(c.contains("data class Waiting(val statusText: String, val nextRunElapsedMs: Long?)"))
         assertTrue("no 'completed' word while waiting", c.contains("val completionWord: String? = if (!isRunning && !isWaiting) when (outcome) {"))
-        assertTrue("no outcome tick while waiting", c.contains("if (!showReplyVariant || isWaiting) null else when (outcome) {"))
+        assertTrue("no outcome tick while waiting", c.contains("if (replyText == null || isRunning) null else when (outcome) {"))
         assertTrue("row 2 is the wait", c.contains("isWaiting -> waiting!!.statusText"))
         assertTrue("counts down", c.contains("elapsed.isCountDown = true"))
         assertTrue("stops at zero", c.contains("if (c.isCountDown && c.base <= SystemClock.elapsedRealtime()) c.stop()"))

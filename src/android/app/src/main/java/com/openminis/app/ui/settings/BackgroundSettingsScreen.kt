@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.BatteryFull
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.WrapText
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,6 +63,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.openminis.app.MinisApp
 import com.openminis.app.R
+import com.openminis.app.data.repository.BackgroundSettingsRepository
 import com.openminis.app.power.PowerOptimizationManager
 import com.openminis.app.i18n.uppercaseForDisplay
 
@@ -96,6 +98,8 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
     val backgroundRepo = app.backgroundSettingsRepository
     val taskNotificationsEnabled by backgroundRepo.taskNotificationsEnabled.collectAsState()
     val backgroundOverlayEnabled by backgroundRepo.backgroundOverlayEnabled.collectAsState()
+    // [T-android-overlay-line-count] How many text lines the capsule reserves.
+    val overlayLineCount by backgroundRepo.overlayLineCount.collectAsState()
     // [T-android-dynamic-island] Live-Updates toggle + device capability.
     val dynamicIslandEnabled by backgroundRepo.dynamicIslandEnabled.collectAsState()
     val scheduledCountdownLead by backgroundRepo.scheduledCountdownLead.collectAsState()
@@ -229,6 +233,38 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
                     stringResource(R.string.settings_bg_overlay_footer)
                 },
             )
+
+            // [T-android-overlay-line-count] Capsule height in text lines, shown
+            // only under a toggle that is ON: a picker for a capsule the user
+            // cannot yet see is noise.
+            if (backgroundOverlayEnabled) {
+                var linesMenu by remember { mutableStateOf(false) }
+                Box {
+                    BgRow(
+                        icon = Icons.Outlined.WrapText,
+                        iconColor = Color(0xFF5856D6),
+                        title = stringResource(R.string.settings_bg_overlay_lines),
+                        subtitle = stringResource(
+                            R.string.settings_bg_overlay_lines_value,
+                            overlayLineCount,
+                        ),
+                        onClick = { linesMenu = true },
+                    )
+                    DropdownMenu(expanded = linesMenu, onDismissRequest = { linesMenu = false }) {
+                        (BackgroundSettingsRepository.MIN_OVERLAY_LINES..
+                            BackgroundSettingsRepository.MAX_OVERLAY_LINES).forEach { n ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.settings_bg_overlay_lines_value, n)) },
+                                onClick = {
+                                    linesMenu = false
+                                    backgroundRepo.setOverlayLineCount(n)
+                                },
+                            )
+                        }
+                    }
+                }
+                BgFooter(stringResource(R.string.settings_bg_overlay_lines_footer))
+            }
 
             // [T-android-dynamic-island] Live Updates / "dynamic island" toggle.
             // Only interactive when the device is capable (Android 16+ with the
