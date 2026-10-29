@@ -15863,6 +15863,11 @@ class ChatViewModel(
                 // been stopped in between.
                 if (!liveTurn.acceptsStreamingWrite(id)) return
                 com.openminis.app.diagnostics.JankDiag.onStreamPublish()
+                // [T-android-overlay-streaming-reply] This is the one gate every
+                // live text publish passes through, throttled already, so the
+                // floating capsule can show the reply as it is written instead of
+                // only after the turn ends.
+                SessionActivityTracker.publishStreamingReply(text)
                 _streamingById.value = _streamingById.value + (
                     id to StreamingDelta(
                         content = text,

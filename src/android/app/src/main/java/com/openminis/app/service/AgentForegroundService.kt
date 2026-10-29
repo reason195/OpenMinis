@@ -581,6 +581,10 @@ class AgentForegroundService : Service() {
                 // Reactive like the toggle: changing it in Settings resizes a
                 // capsule that is on screen right now.
                 backgroundRepo.overlayLineCount,
+                // [T-android-overlay-streaming-reply] The reply as it streams, so
+                // the rows the line count just bought are filled during the run
+                // instead of only after it ends.
+                SessionActivityTracker.streamingReplyExcerpt,
             ) { values: Array<Any?> ->
                 @Suppress("UNCHECKED_CAST")
                 val activeSessions = values[13] as Set<String>
@@ -604,6 +608,7 @@ class AgentForegroundService : Service() {
                     isThinking = values[16] as Boolean,
                     scheduledWait = values[17] as com.openminis.app.scheduled.ScheduledWait?,
                     overlayLines = values[18] as Int,
+                    streamingReplyExcerpt = values[19] as String?,
                 )
             }.distinctUntilChanged().collect { state -> applyOverlayState(state) }
         }
@@ -655,6 +660,9 @@ class AgentForegroundService : Service() {
         val scheduledWait: com.openminis.app.scheduled.ScheduledWait? = null,
         // [T-android-overlay-line-count] Text lines the user picked in Settings.
         val overlayLines: Int = com.openminis.app.data.repository.BackgroundSettingsRepository.DEFAULT_OVERLAY_LINES,
+        // [T-android-overlay-streaming-reply] Reply text so far, for the rows
+        // shown while the run is still going.
+        val streamingReplyExcerpt: String? = null,
     )
 
     private fun applyOverlayState(state: OverlayState) {
@@ -853,7 +861,7 @@ class AgentForegroundService : Service() {
             // index can never describe different tasks.
             //
             // Read here rather than added to the combine() above: that call is
-            // already at 17 flows (its positional `values[n]` indexing is the
+            // already at 20 flows (its positional `values[n]` indexing is the
             // reason this file renumbers so badly), and the slot list changes
             // only on session start/stop — both of which already push a state
             // emission through activeSessions.
@@ -864,7 +872,11 @@ class AgentForegroundService : Service() {
                     statusText = effectiveStatus,
                     isRunning = true,
                     outcome = ToolOutcome.Unknown,
-                    replyExcerpt = null,
+                    // [T-android-overlay-streaming-reply] Was null: the reply rows
+                    // only ever filled in the completion branch below, so a
+                    // 6-line capsule spent the whole run showing 2 rows of text
+                    // inside 6 rows of height.
+                    replyExcerpt = state.streamingReplyExcerpt,
                     targetSessionId = state.currentSessionId,
                     toolTitle = effectiveToolTitle,
                     // [T-android-overlay-streaming-state] isBusy is

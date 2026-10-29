@@ -218,6 +218,20 @@ object SessionActivityTracker {
     val lastReplyExcerpt: StateFlow<String?> = _lastReplyExcerpt.asStateFlow()
 
     /**
+     * [T-android-overlay-streaming-reply] The same excerpt, rebuilt from the
+     * assistant text as it streams instead of only once the turn ends. The
+     * capsule's reply rows are its tallest feature, and before this they sat
+     * empty for the whole run: the busy branch had nothing to show, so a user
+     * who picked 6 lines got a 6-line pill carrying 2 rows of text.
+     *
+     * Like [currentToolName] and friends this describes the FOCUSED task and
+     * the last writer wins, so two sessions streaming at once interleave here
+     * too — the same documented limit the tool rows already carry.
+     */
+    private val _streamingReplyExcerpt = MutableStateFlow<String?>(null)
+    val streamingReplyExcerpt: StateFlow<String?> = _streamingReplyExcerpt.asStateFlow()
+
+    /**
      * [T-android-overlay-reply-status-34599] Session ID associated with
      * [lastReplyExcerpt] and the current activity. Drives the
      * "tap-overlay → open chat" intent in [ToolOverlayController] by
@@ -551,19 +565,40 @@ object SessionActivityTracker {
      * looks like a UI bug.
      */
     fun publishLastReply(sessionId: String, fullText: String?) {
+        val excerpt = replyExcerptOf(fullText) ?: return
+        _currentSessionId.value = sessionId
+        _lastReplyExcerpt.value = excerpt
+    }
+
+    /**
+     * [T-android-overlay-streaming-reply] Called from the throttled streaming
+     * publish in ChatViewModel, so it already runs at UI-cadence rather than
+     * per token. Blank text clears the row rather than leaving the capsule
+     * showing a paragraph the model has since replaced. No session id: like
+     * [toolStarted] and [updateToolStatus] this describes the FOCUSED task and
+     * the last writer wins.
+     */
+    fun publishStreamingReply(fullText: String?) {
+        _streamingReplyExcerpt.value = replyExcerptOf(fullText)
+    }
+
+    /**
+     * Collapse [fullText] to one line and truncate to [REPLY_EXCERPT_MAX], or
+     * null when there is nothing to show. Shared so the live capsule and the
+     * completion capsule cannot drift apart in width or ellipsis.
+     */
+    private fun replyExcerptOf(fullText: String?): String? {
         val collapsed = fullText
             ?.lineSequence()
             ?.map { it.trim() }
             ?.filter { it.isNotEmpty() }
             ?.joinToString(" ")
-            ?.takeIf { it.isNotBlank() } ?: return
-        val excerpt = if (collapsed.length > REPLY_EXCERPT_MAX) {
+            ?.takeIf { it.isNotBlank() } ?: return null
+        return if (collapsed.length > REPLY_EXCERPT_MAX) {
             collapsed.substring(0, REPLY_EXCERPT_MAX).trimEnd() + "…"
         } else {
             collapsed
         }
-        _currentSessionId.value = sessionId
-        _lastReplyExcerpt.value = excerpt
     }
 
     /**
@@ -585,6 +620,7 @@ object SessionActivityTracker {
         // same contract this method already had for a single task.
         clearOverlayTasks()
         _lastReplyExcerpt.value = null
+        _streamingReplyExcerpt.value = null
         _lastToolOutcome.value = ToolOutcome.Unknown
         _lastToolName.value = null
         _lastToolTitle.value = null
@@ -707,6 +743,7 @@ object SessionActivityTracker {
         // doesn't briefly see a stale reply attached to a fresh run.
         _currentSessionId.value = sessionId
         _lastReplyExcerpt.value = null
+        _streamingReplyExcerpt.value = null
         _isThinking.value = false
         _lastToolName.value = null
         _lastToolTitle.value = null

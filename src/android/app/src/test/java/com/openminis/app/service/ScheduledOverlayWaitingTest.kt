@@ -35,7 +35,16 @@ class ScheduledOverlayWaitingTest {
     @Test
     fun `the service renders waiting before the completion linger, without the 5 minute cap`() {
         val svc = ProductionSources.read("service/AgentForegroundService.kt")
-        assertTrue("observed", svc.contains("                SessionActivityTracker.scheduledWait,\n            ) { values: Array<Any?> ->"))
+            .replace("\r\n", "\n")
+        // Assert membership in the combine list rather than adjacency: flows
+        // have been appended after scheduledWait twice, and a needle that
+        // required it to be last went red for reasons that had nothing to do
+        // with the waiting state.
+        val combineList = svc.substringAfter("            combine(")
+            .substringBefore(") { values: Array<Any?> ->")
+        assertTrue("observed", combineList.contains("SessionActivityTracker.scheduledWait,"))
+        assertTrue(combineList.contains("backgroundRepo.overlayLineCount,"))
+        assertTrue(combineList.contains("SessionActivityTracker.streamingReplyExcerpt,"))
         assertTrue(svc.contains("scheduledWait = values[17] as com.openminis.app.scheduled.ScheduledWait?,"))
         val waitingBranch = svc.indexOf("} else if (overlayWaitFor(state.scheduledWait, state.currentSessionId) != null) {")
         val lingerBranch = svc.indexOf("// [T-android-overlay-completion-pending] Completion linger:")
