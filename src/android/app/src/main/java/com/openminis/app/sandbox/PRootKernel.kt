@@ -117,6 +117,24 @@ object PRootKernel {
         }
     }
 
+    /**
+     * [T-android-rootfs-reinstall-bridge] Drop the boot flag so the next
+     * execution runs [bootLocked] again. `RootfsManager.installIfNeeded()`
+     * deletes and re-extracts the whole rootfs, which takes with it everything
+     * a boot lays down inside it: the `assets/default_mount` overlay, the
+     * handler stubs in `/usr/local/bin` that make `android-*` and `minis-*`
+     * resolvable on PATH, the mirror configs, `resolv.conf` and the
+     * `/var/minis/mounts` bind targets. Re-running the boot beats
+     * reproducing that list here, and it keeps the ordering the boot already
+     * guarantees. Without this, installing the rootfs from Settings leaves the
+     * running process with a stock rootfs and no bridge until the app restarts.
+     */
+    fun invalidateBoot() {
+        if (!isBooted) return
+        isBooted = false
+        Log.i(TAG, "Boot invalidated — rootfs replaced, next execution re-boots the kernel")
+    }
+
     private suspend fun bootLocked(context: Context) {
         rootfsManager = RootfsManager.getInstance(context)
         rootfsManager.installIfNeeded()

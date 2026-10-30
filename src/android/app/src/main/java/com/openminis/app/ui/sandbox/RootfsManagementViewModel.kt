@@ -3,6 +3,7 @@ package com.openminis.app.ui.sandbox
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.sandbox.RootfsInstallState
 import com.openminis.app.sandbox.RootfsManager
 import kotlinx.coroutines.Job
@@ -100,6 +101,9 @@ class RootfsManagementViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 manager.installIfNeeded()
+                // [T-android-rootfs-reinstall-bridge] The extract wiped the
+                // overlay and the /usr/local/bin handler stubs.
+                PRootKernel.invalidateBoot()
                 _uiState.value = _uiState.value.copy(
                     isProcessing = false,
                     lastOperationSuccess = true,
@@ -132,6 +136,7 @@ class RootfsManagementViewModel : ViewModel() {
             try {
                 val backup = manager.reset(keepUserData)
 
+                PRootKernel.invalidateBoot()
                 backupDir = backup
                 _uiState.value = _uiState.value.copy(
                     isProcessing = false,
