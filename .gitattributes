@@ -1,0 +1,7 @@
+# Files under these paths are copied into the APK verbatim and later executed or
+# parsed inside the Alpine sandbox, so their bytes must survive a checkout.
+# With core.autocrlf=true a Windows checkout rewrites them to CRLF, and a CRLF
+# /etc/profile.d/minis.sh makes every login shell fail (`: not found` per line),
+# while the jieba dictionaries and res/raw word lists gain a stray \r field.
+src/android/app/src/main/assets/** -text
+src/android/app/src/main/res/raw/** -text
